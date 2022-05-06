@@ -1,40 +1,85 @@
 ﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
 using System.Threading.Channels;
 using Yarp.ReverseProxy.Forwarder;
 
 /// <summary>
 /// The factory that YARP will use the create outbound connections by host name.
 /// </summary>
-internal class TunnelClientFactory : ForwarderHttpClientFactory
+internal class TunnelClientFactory : IForwarderHttpClientFactory
 {
     private readonly ConcurrentDictionary<string, Channel<Stream>> _clusterConnections = new();
+    private readonly ForwarderHttpClientFactory _httpFactory = new();
+    private readonly TunnelForwarderClientFactory _tunnelFactory;
+
+    public TunnelClientFactory()
+    {
+        _tunnelFactory = new TunnelForwarderClientFactory(this);
+    }
 
     public Channel<Stream> GetConnectionChannel(string host)
     {
         return _clusterConnections.GetOrAdd(host, _ => Channel.CreateUnbounded<Stream>());
     }
 
-    protected override void ConfigureHandler(ForwarderHttpClientContext context, SocketsHttpHandler handler)
+    public HttpMessageInvoker CreateClient(ForwarderHttpClientContext context)
     {
-        base.ConfigureHandler(context, handler);
-
-        var previous = handler.ConnectCallback ?? DefaultConnectCallback;
-
-        static async ValueTask<Stream> DefaultConnectCallback(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+        if (context.OldClient is not null && context.OldConfig == context.NewConfig)
         {
-            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
-            await socket.ConnectAsync(context.DnsEndPoint);
-            return new NetworkStream(socket, ownsSocket: true);
+            return context.OldClient;
         }
 
-        handler.ConnectCallback = (context, cancellationToken) =>
+        return new HttpMessageInvoker(new TunnelHttpHandler(
+            _httpFactory.CreateClient(context),
+            _tunnelFactory.CreateClient(context)));
+    }
+
+    private sealed class TunnelForwarderClientFactory : ForwarderHttpClientFactory
+    {
+        private readonly TunnelClientFactory _tunnelFactory;
+
+        public TunnelForwarderClientFactory(TunnelClientFactory tunnelFactory)
         {
-            if (_clusterConnections.TryGetValue(context.DnsEndPoint.Host, out var channel))
+            _tunnelFactory = tunnelFactory;
+        }
+
+        protected override void ConfigureHandler(ForwarderHttpClientContext context, SocketsHttpHandler handler)
+        {
+            base.ConfigureHandler(context, handler);
+
+            handler.ConnectCallback = (context, cancellation) =>
             {
-                return channel.Reader.ReadAsync(cancellationToken);
+                var channel = _tunnelFactory.GetConnectionChannel(context.InitialRequestMessage.RequestUri!.IdnHost);
+                return channel.Reader.ReadAsync(cancellation);
+            };
+        }
+    }
+
+    private sealed class TunnelHttpHandler : HttpMessageHandler
+    {
+        private readonly HttpMessageInvoker _httpHandler;
+        private readonly HttpMessageInvoker _tunnelHandler;
+
+        public TunnelHttpHandler(HttpMessageInvoker httpHandler, HttpMessageInvoker tunnelHandler)
+        {
+            _httpHandler = httpHandler;
+            _tunnelHandler = tunnelHandler;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri?.Scheme == "tunnel")
+            {
+                request.RequestUri = new Uri(string.Concat("http", request.RequestUri.AbsoluteUri.AsSpan("tunnel".Length)), new UriCreationOptions
+                {
+                    DangerousDisablePathAndQueryCanonicalization = true
+                });
+
+                return _tunnelHandler.SendAsync(request, cancellationToken);
             }
-            return previous(context, cancellationToken);
-        };
+            else
+            {
+                return _httpHandler.SendAsync(request, cancellationToken);
+            }
+        }
     }
 }
