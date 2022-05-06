@@ -5,6 +5,12 @@ public static class TunnelExensions
 {
     public static IServiceCollection AddTunnelServices(this IServiceCollection services)
     {
+        try
+        {
+            UriParser.Register(new HttpStyleUriParser(), "tunnel", 80);
+        }
+        catch { }
+
         var tunnelFactory = new TunnelClientFactory();
         services.AddSingleton(tunnelFactory);
         services.AddSingleton<IForwarderHttpClientFactory>(tunnelFactory);
