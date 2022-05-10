@@ -26,7 +26,7 @@ app.MapHttp2Tunnel("/x-tunnel-connect-h2")
         {
             if (!context.Request.Headers.TryGetValue(HeaderNames.Authorization, out var token) ||
                 token.Count != 1 ||
-                app.Configuration["X-Tunnel-Token"] is not string configToken ||
+                app.Configuration["X_Tunnel_Token"] is not string configToken ||
                 !Equals(token.ToString(), configToken))
             {
                 context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;

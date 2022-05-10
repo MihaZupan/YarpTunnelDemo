@@ -1,4 +1,6 @@
-﻿using System.Net.WebSockets;
+﻿using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
+using System.Net.WebSockets;
 using Yarp.ReverseProxy.Forwarder;
 
 public static class TunnelExensions
@@ -21,6 +23,8 @@ public static class TunnelExensions
                 return Results.BadRequest();
             }
 
+            DisableMinRequestBodyDataRateAndMaxRequestBodySize(context);
+
             var stream = new DuplexHttpStream(context);
 
             using var reg = lifetime.ApplicationStopping.Register(() => stream.Shutdown());
@@ -40,6 +44,24 @@ public static class TunnelExensions
 
             return Results.Empty;
         });
+
+        static void DisableMinRequestBodyDataRateAndMaxRequestBodySize(HttpContext httpContext)
+        {
+            var minRequestBodyDataRateFeature = httpContext.Features.Get<IHttpMinRequestBodyDataRateFeature>();
+            if (minRequestBodyDataRateFeature is not null)
+            {
+                minRequestBodyDataRateFeature.MinDataRate = null;
+            }
+
+            var maxRequestBodySizeFeature = httpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+            if (maxRequestBodySizeFeature is not null)
+            {
+                if (!maxRequestBodySizeFeature.IsReadOnly)
+                {
+                    maxRequestBodySizeFeature.MaxRequestBodySize = null;
+                }
+            }
+        }
     }
 
     public static IEndpointConventionBuilder MapWebSocketTunnel(this IEndpointRouteBuilder routes, string path)
