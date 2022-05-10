@@ -6,7 +6,10 @@ builder.Services.AddReverseProxy()
 // This is the HTTP/2 endpoint to register this app as part of the cluster endpoint
 var url = builder.Configuration["Tunnel:Url"]!;
 
-builder.WebHost.UseTunnelTransport(url);
+builder.WebHost.UseTunnelTransport(url, options =>
+{
+    options.AuthHeaderValue = builder.Configuration["Tunnel:AuthHeaderValue"];
+});
 
 var app = builder.Build();
 

@@ -9,6 +9,7 @@ internal class TunnelConnectionListener : IConnectionListener
 {
     private readonly SemaphoreSlim _connectionLock;
     private readonly ConcurrentDictionary<ConnectionContext, ConnectionContext> _connections = new();
+    private readonly ILogger _logger;
     private readonly TunnelOptions _options;
     private readonly CancellationTokenSource _closedCts = new();
     private readonly HttpMessageInvoker _httpMessageInvoker = new(new SocketsHttpHandler
@@ -18,8 +19,9 @@ internal class TunnelConnectionListener : IConnectionListener
         PooledConnectionIdleTimeout = Timeout.InfiniteTimeSpan
     });
 
-    public TunnelConnectionListener(TunnelOptions options, EndPoint endpoint)
+    public TunnelConnectionListener(ILogger logger, TunnelOptions options, EndPoint endpoint)
     {
+        _logger = logger;
         _options = options;
         _connectionLock = new(options.MaxConnectionCount);
         EndPoint = endpoint;
@@ -43,12 +45,28 @@ internal class TunnelConnectionListener : IConnectionListener
             // Kestrel will keep an active accept call open as long as the transport is active
             await _connectionLock.WaitAsync(cancellationToken);
 
-            var connection = new TrackLifetimeConnectionContext(_options.Transport switch
+            TrackLifetimeConnectionContext connection;
+            while (true)
             {
-                TransportType.WebSockets => await WebSocketConnectionContext.ConnectAsync(Uri, cancellationToken),
-                TransportType.HTTP2 => await HttpClientConnectionContext.ConnectAsync(_httpMessageInvoker, Uri, cancellationToken),
-                _ => throw new NotSupportedException(),
-            });
+                try
+                {
+                    connection = new TrackLifetimeConnectionContext(_options.Transport switch
+                    {
+                        //TransportType.WebSockets => await WebSocketConnectionContext.ConnectAsync(Uri, cancellationToken),
+                        TransportType.HTTP2 => await HttpClientConnectionContext.ConnectAsync(_httpMessageInvoker, Uri, _options, cancellationToken),
+                        _ => throw new NotSupportedException(),
+                    });
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error while connecting to the frontend");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                await Task.Delay(1000, cancellationToken);
+            }
 
             // Track this connection lifetime
             _connections.TryAdd(connection, connection);

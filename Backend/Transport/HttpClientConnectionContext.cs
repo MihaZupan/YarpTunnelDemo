@@ -3,6 +3,7 @@ using System.Net;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Net.Http.Headers;
 
 internal class HttpClientConnectionContext : ConnectionContext,
                 IConnectionLifetimeFeature,
@@ -65,18 +66,36 @@ internal class HttpClientConnectionContext : ConnectionContext,
         return base.DisposeAsync();
     }
 
-    public static async ValueTask<ConnectionContext> ConnectAsync(HttpMessageInvoker invoker, Uri uri, CancellationToken cancellationToken)
+    public static async ValueTask<ConnectionContext> ConnectAsync(HttpMessageInvoker invoker, Uri uri, TunnelOptions options, CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
-            Version = new Version(2, 0)
+            Version = new Version(2, 0),
+            VersionPolicy = HttpVersionPolicy.RequestVersionExact
         };
+
+        if (options.AuthHeaderValue is not null)
+        {
+            request.Headers.TryAddWithoutValidation(HeaderNames.Authorization, options.AuthHeaderValue);
+        }
+
         var connection = new HttpClientConnectionContext();
         request.Content = new HttpClientConnectionContextContent(connection);
+
         var response = await invoker.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        connection.HttpResponseMessage = response;
-        var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-        connection.Input = PipeReader.Create(responseStream);
+        try
+        {
+            response.EnsureSuccessStatusCode();
+
+            connection.HttpResponseMessage = response;
+            var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            connection.Input = PipeReader.Create(responseStream);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
 
         return connection;
     }
