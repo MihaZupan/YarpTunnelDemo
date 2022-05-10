@@ -3,6 +3,8 @@ using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddLettuceEncrypt();
+
 builder.Services.AddReverseProxy()
        .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
